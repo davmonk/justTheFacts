@@ -163,14 +163,41 @@ gather chk_pkgconf   bash -c 'command -v pkg-config >/dev/null 2>&1 && v=$(pkg-c
 gather chk_autoconf  bash -c 'command -v autoconf >/dev/null 2>&1 && v=$(autoconf --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
 gather chk_automake  bash -c 'command -v automake >/dev/null 2>&1 && v=$(automake --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
 gather chk_libtool   bash -c '
-  for bin in libtool glibtool /usr/bin/libtool /usr/local/bin/libtool; do
-    command -v "$bin" >/dev/null 2>&1 || [[ -x "$bin" ]] || continue
-    v=$($bin --version 2>/dev/null | head -1)
-    [[ -z "$v" ]] && v=$($bin -V 2>&1 | head -1)
-    echo "1|${v:-$bin installed}"
+  # Locate a binary by name: tries PATH, type -P, known dirs, then find
+  _find_bin() {
+    local name="$1" p found
+    found=$(command -v "$name" 2>/dev/null)
+    [[ -n "$found" ]] && echo "$found" && return 0
+    found=$(type -P "$name" 2>/dev/null)
+    [[ -n "$found" ]] && echo "$found" && return 0
+    # Walk every directory in the current PATH explicitly
+    IFS=: read -ra _dirs <<< "$PATH"
+    for p in "${_dirs[@]}"; do
+      [[ -x "$p/$name" ]] && echo "$p/$name" && return 0
+    done
+    # Check common locations that may not be in non-interactive PATH
+    for p in /usr/bin /usr/local/bin /bin /usr/sbin /usr/local/sbin /sbin \
+              /opt/homebrew/bin /home/linuxbrew/.linuxbrew/bin \
+              /opt/local/bin /usr/pkg/bin; do
+      [[ -x "$p/$name" ]] && echo "$p/$name" && return 0
+    done
+    # Last resort: find the binary under /usr and /opt
+    found=$(find /usr /opt -maxdepth 5 -name "$name" -type f -perm /111 2>/dev/null | head -1)
+    [[ -n "$found" ]] && echo "$found" && return 0
+    return 1
+  }
+  for name in libtool glibtool; do
+    bin=$(_find_bin "$name") || continue
+    v=$("$bin" --version 2>/dev/null | head -1)
+    [[ -z "$v" ]] && v=$("$bin" -V 2>&1 | head -1)
+    echo "1|${v:-$name installed}"
     exit
   done
-  echo "0|not found"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "0|not found (package: libtool-bin)"
+  else
+    echo "0|not found"
+  fi
 '
 gather chk_git       bash -c 'command -v git >/dev/null 2>&1 && v=$(git --version 2>/dev/null) && echo "1|$v" || echo "0|not found"'
 gather chk_openssl   bash -c 'command -v openssl >/dev/null 2>&1 && v=$(openssl version 2>/dev/null) && echo "1|$v" || echo "0|not found"'
