@@ -163,10 +163,8 @@ gather chk_pkgconf   bash -c 'command -v pkg-config >/dev/null 2>&1 && v=$(pkg-c
 gather chk_autoconf  bash -c 'command -v autoconf >/dev/null 2>&1 && v=$(autoconf --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
 gather chk_automake  bash -c 'command -v automake >/dev/null 2>&1 && v=$(automake --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
 gather chk_libtool   bash -c '
-  for bin in libtool glibtool; do
-    # Verify the binary exists before running it — prevents capturing
-    # "command not found" from stderr as a false-positive version string.
-    command -v "$bin" >/dev/null 2>&1 || which "$bin" >/dev/null 2>&1 || continue
+  for bin in libtool glibtool /usr/bin/libtool /usr/local/bin/libtool; do
+    command -v "$bin" >/dev/null 2>&1 || [[ -x "$bin" ]] || continue
     v=$($bin --version 2>/dev/null | head -1)
     [[ -z "$v" ]] && v=$($bin -V 2>&1 | head -1)
     echo "1|${v:-$bin installed}"
