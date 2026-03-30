@@ -2,8 +2,6 @@
 
 A fast, colorful system information script that displays a structured table of facts about the machine it runs on.
 
-![justTheFacts screenshot](https://user-images.githubusercontent.com/placeholder/screenshot.png)
-
 ## What it does
 
 Displays a formatted table covering:
