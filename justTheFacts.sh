@@ -158,7 +158,16 @@ gather chk_make      bash -c '
   echo "0|not found"
 '
 gather chk_cmake     bash -c 'command -v cmake >/dev/null 2>&1 && v=$(cmake --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
-gather chk_ninja     bash -c 'command -v ninja >/dev/null 2>&1 && v=$(ninja --version 2>/dev/null) && echo "1|ninja $v" || echo "0|not found"'
+gather chk_ninja     bash -c '
+  if command -v ninja >/dev/null 2>&1; then
+    v=$(ninja --version 2>/dev/null)
+    echo "1|ninja $v"
+  elif [[ "$(uname -s)" == "Linux" ]]; then
+    echo "0|not found (package: ninja-build)"
+  else
+    echo "0|not found"
+  fi
+'
 gather chk_pkgconf   bash -c 'command -v pkg-config >/dev/null 2>&1 && v=$(pkg-config --version 2>/dev/null) && echo "1|pkg-config $v" || echo "0|not found"'
 gather chk_autoconf  bash -c 'command -v autoconf >/dev/null 2>&1 && v=$(autoconf --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
 gather chk_automake  bash -c 'command -v automake >/dev/null 2>&1 && v=$(automake --version 2>/dev/null | head -1) && echo "1|$v" || echo "0|not found"'
