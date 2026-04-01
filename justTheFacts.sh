@@ -269,7 +269,7 @@ if [[ "$OS_TYPE" == "Darwin" ]]; then
       else print \"none configured\"
     }"
   '
-  gather disk         bash -c 'df -Pk / | awk "NR==2 {printf \"%.1f GB used / %.0f GB total (%d%% free)\", \$3*1024/1e9, \$2*1024/1e9, 100-int(\$5)}"'
+  gather disk         bash -c 'df -Pk / | awk "NR==2 {used=(\$2-\$4); printf \"%.1f GB used / %.0f GB total (%d%% free)\", used*1024/1e9, \$2*1024/1e9, (\$4/\$2)*100}"'
   gather gpu          bash -c '
     info=$(system_profiler SPDisplaysDataType 2>/dev/null)
     model=$(echo "$info" | awk -F": " "/Chipset Model/{print \$2; exit}")
