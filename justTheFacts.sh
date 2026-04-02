@@ -308,19 +308,13 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
-    # dmesg often has the full CPU brand string from boot
-    if [[ -z "$m" ]]; then
-      for f in /var/run/dmesg.boot /var/log/dmesg; do
-        [[ -r "$f" ]] || continue
-        m=$(grep -m1 "^cpu[0-9]* at" "$f" 2>/dev/null | sed -E "s/.*: (.+), id 0x.*/\1/")
-        [[ -n "$m" ]] && break
-      done
-    fi
-    [[ -z "$m" ]] && m=$(dmesg 2>/dev/null | grep -m1 "^cpu[0-9]* at" | sed -E "s/.*: (.+), id 0x.*/\1/")
+    [[ -z "$m" ]] && m=$(grep -m1 "^cpu[0-9]* at" /var/run/dmesg.boot 2>/dev/null | sed -nE "s/.*: (.+), id 0x.*/\1/p")
+    [[ -z "$m" ]] && m=$(grep -m1 "^cpu[0-9]* at" /var/log/dmesg 2>/dev/null | sed -nE "s/.*: (.+), id 0x.*/\1/p")
+    [[ -z "$m" ]] && m=$(dmesg 2>/dev/null | grep -m1 "^cpu[0-9]* at" | sed -nE "s/.*: (.+), id 0x.*/\1/p")
     [[ -z "$m" ]] && m=$(sysctl -n hw.machine_arch 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -m 2>/dev/null)
-    echo "$m" | tr -s ' '
+    echo "$m" | tr -s " "
   '
   gather cpu_cores    bash -c '
     cd /tmp
