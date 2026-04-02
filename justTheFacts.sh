@@ -108,6 +108,9 @@ gather ip               bash -c '
     v=$("$ifc" -a 2>/dev/null | awk "/inet / && !/127\.0\.0\.1/{print \$2; exit}")
     [[ -n "$v" ]] && echo "$v" && exit
   done
+  # Fallback: extract local IP from an active connection (works when ifconfig requires root)
+  v=$(netstat -f inet -n 2>/dev/null | awk "/ESTABLISHED/{split(\$4,a,\".\"); if(a[1]!=\"127\"){print a[1]\".\"a[2]\".\"a[3]\".\"a[4]; exit}}")
+  [[ -n "$v" ]] && echo "$v" && exit
 '
 gather arch             uname -m
 gather kernel           uname -r
@@ -146,11 +149,12 @@ _chk() {
 }
 gather chk_make      bash -c '
   if command -v gmake >/dev/null 2>&1; then
-    v=$(gmake --version 2>/dev/null | grep -v "^[[:space:]]*$" | head -1)
+    v=$(gmake --version 2>/dev/null | grep -i "^GNU Make" | head -1)
+    [[ -z "$v" ]] && v=$(gmake --version 2>/dev/null | grep -viE "building software|nfs mount|system wide|bboard" | grep -v "^[[:space:]]*$" | head -1)
     echo "1|$v"; exit
   fi
   if command -v make >/dev/null 2>&1; then
-    v=$(cd /tmp && make --version 2>/dev/null | grep -viE "building|nfs|warning" | grep -v "^[[:space:]]*$" | head -1)
+    v=$(cd /tmp && make --version 2>/dev/null | grep -viE "building software|nfs mount|system wide|bboard|warning" | grep -v "^[[:space:]]*$" | head -1)
     [[ -z "$v" ]] && v=$(cd /tmp && make -V .MAKE.VERSION 2>/dev/null | grep -v "^[[:space:]]*$" | head -1 | awk "{print \"BSD make \" \$1}")
     [[ -z "$v" ]] && v="BSD make (system)"
     echo "1|$v"; exit
@@ -294,8 +298,8 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   gather os_build     bash -c 'uname -v | awk -F"[()]" "{print \$2}"'
   gather cpu_model    bash -c '
     cd /tmp
-    m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null)
-    [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null)
+    m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
+    [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
     echo "$m"
@@ -335,38 +339,25 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather ram_used     bash -c '
     cd /tmp
-    psize=$(sysctl -n hw.pagesize 2>/dev/null)
-    [[ -z "$psize" ]] && psize=$(sysctl hw.pagesize 2>/dev/null | awk "{print \$NF}")
-    [[ -z "$psize" || "$psize" -le 0 ]] 2>/dev/null && psize=4096
-    # Try uvmexp2 (64-bit counters, NetBSD 5+) first
-    npages=$(sysctl -n vm.uvmexp2.npages 2>/dev/null)
-    free_p=$(sysctl -n vm.uvmexp2.free 2>/dev/null)
-    # Fall back to uvmexp
-    if [[ -z "$npages" || -z "$free_p" ]]; then
-      npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
-      [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
-      free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
-      [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
-    fi
-    if [[ -n "$npages" && -n "$free_p" && "$npages" -gt 0 ]] 2>/dev/null; then
-      awk -v np="$npages" -v fp="$free_p" -v ps="$psize" \
-        "BEGIN{used=(np-fp)*ps; if(used<0)used=0; printf \"%.1f GB used\", used/1000000000}"
+    total=$(sysctl -n hw.physmem64 2>/dev/null)
+    psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
+    # vm.uvmexp is opaque on NetBSD; use vmstat fre column instead.
+    # SPECULATIVE: fre is assumed to be in pages per NetBSD docs — not empirically verified.
+    fre=$(vmstat 2>/dev/null | awk "NR==3{print \$4}")
+    if [[ -n "$fre" && -n "$total" && "$fre" -gt 0 && "$total" -gt 0 ]] 2>/dev/null; then
+      awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
+        "BEGIN{used=tot-(fre*ps); if(used<0)used=0; printf \"%.1f GB used\", used/1e9}"
     fi
   '
   gather ram_pct      bash -c '
     cd /tmp
-    # Try uvmexp2 (64-bit counters, NetBSD 5+) first
-    npages=$(sysctl -n vm.uvmexp2.npages 2>/dev/null)
-    free_p=$(sysctl -n vm.uvmexp2.free 2>/dev/null)
-    # Fall back to uvmexp
-    if [[ -z "$npages" || -z "$free_p" ]]; then
-      npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
-      [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
-      free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
-      [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
-    fi
-    if [[ -n "$npages" && -n "$free_p" && "$npages" -gt 0 ]] 2>/dev/null; then
-      awk -v np="$npages" -v fp="$free_p" "BEGIN{printf \"%d%% free\", (fp/np)*100}"
+    total=$(sysctl -n hw.physmem64 2>/dev/null)
+    psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
+    # SPECULATIVE: vmstat fre (col 4) assumed pages per NetBSD docs — not empirically verified.
+    fre=$(vmstat 2>/dev/null | awk "NR==3{print \$4}")
+    if [[ -n "$fre" && -n "$total" && "$fre" -gt 0 && "$total" -gt 0 ]] 2>/dev/null; then
+      awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
+        "BEGIN{printf \"%d%% free\", (fre*ps/tot)*100}"
     fi
   '
   gather swap         bash -c '
