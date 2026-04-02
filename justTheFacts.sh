@@ -149,8 +149,8 @@ _chk() {
 }
 gather chk_make      bash -c '
   if command -v gmake >/dev/null 2>&1; then
-    v=$(gmake --version 2>/dev/null | grep -i "^GNU Make" | head -1)
-    [[ -z "$v" ]] && v=$(gmake --version 2>/dev/null | grep -viE "building software|nfs mount|system wide|bboard" | grep -v "^[[:space:]]*$" | head -1)
+    v=$(cd /tmp && gmake --version 2>/dev/null | grep -i "^GNU Make" | head -1)
+    [[ -z "$v" ]] && v=$(cd /tmp && gmake --version 2>/dev/null | grep -v "^[[:space:]]*$" | head -1)
     echo "1|$v"; exit
   fi
   if command -v make >/dev/null 2>&1; then
