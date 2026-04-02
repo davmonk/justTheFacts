@@ -122,8 +122,8 @@ gather ip               bash -c '
 gather arch             uname -m
 gather kernel           uname -r
 # cpu_cores is gathered per-OS below for richer platform-specific detail
-gather uptime           bash -c 'uptime | sed "s/.*up //" | sed "s/, *[0-9]* users\{0,1\}.*//"'
-gather load             bash -c 'uptime | awk -F"load averages?:" "{print \$2}" | awk "{print \$1, \$2, \$3}"'
+gather uptime           bash -c 'uptime | sed "s/.*up //" | sed "s/, *[0-9]* users\{0,1\}.*//" | tr -s " "'
+gather load             bash -c 'uptime | awk -F"load averages?:" "{print \$2}" | tr -d "," | awk "{print \$1, \$2, \$3}"'
 gather shell            bash -c 'basename "$SHELL"'
 gather user             id -un
 gather clang            bash -c '
@@ -308,6 +308,15 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
+    # dmesg often has the full CPU brand string from boot
+    if [[ -z "$m" ]]; then
+      for f in /var/run/dmesg.boot /var/log/dmesg; do
+        [[ -r "$f" ]] || continue
+        m=$(grep -m1 "^cpu[0-9]* at" "$f" 2>/dev/null | sed -E "s/.*: (.+), id 0x.*/\1/")
+        [[ -n "$m" ]] && break
+      done
+    fi
+    [[ -z "$m" ]] && m=$(dmesg 2>/dev/null | grep -m1 "^cpu[0-9]* at" | sed -E "s/.*: (.+), id 0x.*/\1/")
     [[ -z "$m" ]] && m=$(sysctl -n hw.machine_arch 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -m 2>/dev/null)
@@ -509,7 +518,7 @@ hline_open
 row "CPU"              "$(get cpu_model)"
 row "CPU Cores"        "$(get cpu_cores)"
 [[ "$OS_TYPE" == "Darwin" ]] && row "CPU Freq" "$(get cpu_freq)"
-row "GPU"              "$(get gpu)"
+_gpu=$(get gpu); [[ -n "$_gpu" && "$_gpu" != "n/a" ]] && row "GPU" "$_gpu"
 row "Memory"           "$(get ram_used)  /  $(get ram_total)  ($(get ram_pct))"
 row "Swap"             "$(get swap)"
 row "Disk (/)"         "$(get disk)"
