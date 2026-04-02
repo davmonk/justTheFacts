@@ -65,7 +65,7 @@ header_row() {
 # Each fact is collected in a background job writing to a temp file.
 # We wait for all jobs, then render — total time = slowest single fact.
 
-TMPDIR_JTF=$(mktemp -d)
+TMPDIR_JTF=$(mktemp -d) || { echo "justTheFacts: could not create temp dir" >&2; exit 1; }
 trap 'rm -rf "$TMPDIR_JTF"' EXIT
 
 gather() { local key="$1"; shift; ("$@" 2>/dev/null) > "$TMPDIR_JTF/$key" & }
@@ -122,8 +122,8 @@ gather ip               bash -c '
 gather arch             uname -m
 gather kernel           uname -r
 # cpu_cores is gathered per-OS below for richer platform-specific detail
-gather uptime           bash -c 'uptime | sed "s/.*up //" | sed "s/, *[0-9]* users\{0,1\}.*//"'
-gather load             bash -c 'uptime | awk -F"load averages?:" "{print \$2}" | awk "{print \$1, \$2, \$3}"'
+gather uptime           bash -c 'uptime | sed "s/.*up //" | sed "s/, *[0-9]* users\{0,1\}.*//" | tr -s " "'
+gather load             bash -c 'uptime | awk -F"load averages?:" "{print \$2}" | tr -d "," | awk "{print \$1, \$2, \$3}"'
 gather shell            bash -c 'basename "$SHELL"'
 gather user             id -un
 gather clang            bash -c '
@@ -267,7 +267,7 @@ if [[ "$OS_TYPE" == "Darwin" ]]; then
       /Pages active/    { active=\$3 }
       /Pages wired/     { wired=\$4 }
       /Pages compressed/{ comp=\$3 }
-      END { used=(active+wired+comp)*4096; printf \"%d%% free\", (1-(used/tot))*100 }
+      END { used=(active+wired+comp)*4096; pct=(1-(used/tot))*100; if(pct<0)pct=0; if(pct>100)pct=100; printf \"%d%% free\", pct }
     "
   '
   gather swap         bash -c '
@@ -308,6 +308,15 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
+    # dmesg often has the full CPU brand string from boot
+    if [[ -z "$m" ]]; then
+      for f in /var/run/dmesg.boot /var/log/dmesg; do
+        [[ -r "$f" ]] || continue
+        m=$(grep -m1 "^cpu[0-9]* at" "$f" 2>/dev/null | sed -E "s/.*: (.+), id 0x.*/\1/")
+        [[ -n "$m" ]] && break
+      done
+    fi
+    [[ -z "$m" ]] && m=$(dmesg 2>/dev/null | grep -m1 "^cpu[0-9]* at" | sed -E "s/.*: (.+), id 0x.*/\1/")
     [[ -z "$m" ]] && m=$(sysctl -n hw.machine_arch 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -m 2>/dev/null)
@@ -325,7 +334,7 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
       echo "${physical} cores, ${logical} threads (HT)"
     elif [[ -n "$physical" && -n "$logical" && "$physical" != "$logical" ]] 2>/dev/null; then
       echo "${physical} cores (${logical} logical)"
-    else
+    elif [[ -n "$logical" ]]; then
       echo "${logical} logical"
     fi
   '
@@ -350,10 +359,11 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     cd /tmp
     total=$(sysctl -n hw.physmem64 2>/dev/null)
     psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
-    # vm.uvmexp is opaque on NetBSD; use vmstat fre column instead.
-    # SPECULATIVE: fre is assumed to be in pages per NetBSD docs — not empirically verified.
+    # vmstat col 4 is 'fre' (free pages) per NetBSD vmstat(1)
     fre=$(vmstat 2>/dev/null | awk "NR==3{print \$4}")
-    if [[ -n "$fre" && -n "$total" && "$fre" -gt 0 && "$total" -gt 0 ]] 2>/dev/null; then
+    total_pages=$(( total / psize )) 2>/dev/null
+    if [[ -n "$fre" && -n "$total" && "$fre" -ge 0 && "$total" -gt 0 ]] 2>/dev/null && \
+       [[ -z "$total_pages" || "$fre" -le "$total_pages" ]] 2>/dev/null; then
       awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
         "BEGIN{used=tot-(fre*ps); if(used<0)used=0; printf \"%.1f GB used\", used/1e9}"
     fi
@@ -362,11 +372,13 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     cd /tmp
     total=$(sysctl -n hw.physmem64 2>/dev/null)
     psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
-    # SPECULATIVE: vmstat fre (col 4) assumed pages per NetBSD docs — not empirically verified.
+    # vmstat col 4 is 'fre' (free pages) per NetBSD vmstat(1)
     fre=$(vmstat 2>/dev/null | awk "NR==3{print \$4}")
-    if [[ -n "$fre" && -n "$total" && "$fre" -gt 0 && "$total" -gt 0 ]] 2>/dev/null; then
+    total_pages=$(( total / psize )) 2>/dev/null
+    if [[ -n "$fre" && -n "$total" && "$fre" -ge 0 && "$total" -gt 0 ]] 2>/dev/null && \
+       [[ -z "$total_pages" || "$fre" -le "$total_pages" ]] 2>/dev/null; then
       awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
-        "BEGIN{printf \"%d%% free\", (fre*ps/tot)*100}"
+        "BEGIN{pct=(fre*ps/tot)*100; if(pct>100)pct=100; printf \"%d%% free\", pct}"
     fi
   '
   gather swap         bash -c '
@@ -385,7 +397,7 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   gather disk         bash -c 'df -Pk / | awk "NR==2 {printf \"%.1f GB used / %.0f GB total (%d%% free)\", \$3*1024/1e9, \$2*1024/1e9, 100-int(\$5)}"'
   gather gpu          bash -c '
     # pcictl gives proper PCI device names — try it first
-    for bus in pci0 pci1 pci2; do
+    for bus in pci0 pci1 pci2 pci3 pci4 pci5 pci6 pci7; do
       line=$(pcictl "$bus" list 2>/dev/null | grep -iE "display|vga|3d|graphics" | head -1 | sed "s/^[^:]*: //")
       [[ -n "$line" ]] && echo "$line" && exit
     done
@@ -497,7 +509,7 @@ hline_close
 header_row " OS & Kernel "
 hline_open
 row "OS"               "$(get os_name) $(get os_ver)"
-[[ -n "$(get os_build)" && "$(get os_build)" != "n/a" ]] && row "Build" "$(get os_build)"
+_os_build=$(get os_build); [[ -n "$_os_build" && "$_os_build" != "n/a" ]] && row "Build" "$_os_build"
 row "Kernel"           "$(get kernel)"
 row "Architecture"     "$(get arch)"
 hline_close
@@ -506,7 +518,7 @@ hline_open
 row "CPU"              "$(get cpu_model)"
 row "CPU Cores"        "$(get cpu_cores)"
 [[ "$OS_TYPE" == "Darwin" ]] && row "CPU Freq" "$(get cpu_freq)"
-row "GPU"              "$(get gpu)"
+_gpu=$(get gpu); [[ -n "$_gpu" && "$_gpu" != "n/a" ]] && row "GPU" "$_gpu"
 row "Memory"           "$(get ram_used)  /  $(get ram_total)  ($(get ram_pct))"
 row "Swap"             "$(get swap)"
 row "Disk (/)"         "$(get disk)"
