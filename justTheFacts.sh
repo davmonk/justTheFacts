@@ -88,14 +88,21 @@ gather fqdn             bash -c '
   fqdn=$(hostname -f 2>/dev/null)
   if [[ -n "$fqdn" ]]; then echo "$fqdn"; exit; fi
   hn=$(hostname 2>/dev/null)
-  # NetBSD/BSD: try kern.domainname sysctl or domainname command
+  # NetBSD/BSD: try kern.domainname sysctl or domainname command.
+  # Require a dot — NIS domains (e.g. SDF3) have none; DNS domains (e.g. sdf.org) always do.
   dn=$(sysctl -n kern.domainname 2>/dev/null || domainname 2>/dev/null)
-  if [[ -n "$dn" && "$dn" != "(none)" && "$dn" != "localdomain" ]]; then
+  if [[ -n "$dn" && "$dn" != "(none)" && "$dn" != "localdomain" && "$dn" == *"."* ]]; then
     echo "${hn}.${dn}"; exit
   fi
   # Parse /etc/hosts for a dotted name matching our hostname
   match=$(awk -v h="$hn" "!/^[[:space:]]*#/ && /\./ { for(i=2;i<=NF;i++) if(\$i==h){print \$2;exit} }" /etc/hosts 2>/dev/null)
   [[ -n "$match" ]] && echo "$match" && exit
+  # Reverse DNS on our outbound IP as last resort
+  ip=$(netstat -f inet -n 2>/dev/null | awk "/ESTABLISHED/{split(\$4,a,\".\"); if(a[1]!=\"127\"){print a[1]\".\"a[2]\".\"a[3]\".\"a[4]; exit}}")
+  if [[ -n "$ip" ]]; then
+    rdns=$(host "$ip" 2>/dev/null | awk "/domain name pointer/{gsub(/\\.$/,\"\",\$NF); print \$NF; exit}")
+    [[ -n "$rdns" ]] && echo "$rdns" && exit
+  fi
   echo "$hn"
 '
 gather ip               bash -c '
