@@ -105,7 +105,7 @@ gather ip               bash -c '
   [[ -n "$v" ]] && echo "$v" && exit
   for ifc in /sbin/ifconfig /usr/sbin/ifconfig ifconfig; do
     [[ "$ifc" == ifconfig ]] || [[ -x "$ifc" ]] || continue
-    v=$("$ifc" 2>/dev/null | awk "/inet / && !/127\.0\.0\.1/{print \$2; exit}")
+    v=$("$ifc" -a 2>/dev/null | awk "/inet / && !/127\.0\.0\.1/{print \$2; exit}")
     [[ -n "$v" ]] && echo "$v" && exit
   done
 '
@@ -150,7 +150,7 @@ gather chk_make      bash -c '
     echo "1|$v"; exit
   fi
   if command -v make >/dev/null 2>&1; then
-    v=$(cd /tmp && make --version 2>/dev/null | grep -v "^[[:space:]]*$" | head -1)
+    v=$(cd /tmp && make --version 2>/dev/null | grep -viE "building|nfs|warning" | grep -v "^[[:space:]]*$" | head -1)
     [[ -z "$v" ]] && v=$(cd /tmp && make -V .MAKE.VERSION 2>/dev/null | grep -v "^[[:space:]]*$" | head -1 | awk "{print \"BSD make \" \$1}")
     [[ -z "$v" ]] && v="BSD make (system)"
     echo "1|$v"; exit
@@ -294,9 +294,9 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   gather os_build     bash -c 'uname -v | awk -F"[()]" "{print \$2}"'
   gather cpu_model    bash -c '
     cd /tmp
-    m=$(sysctl -n hw.model 2>/dev/null)
+    m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null)
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null)
-    [[ -z "$m" ]] && m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null)
+    [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
     echo "$m"
   '
@@ -335,13 +335,19 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather ram_used     bash -c '
     cd /tmp
-    npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
-    [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
-    free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
-    [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
     psize=$(sysctl -n hw.pagesize 2>/dev/null)
     [[ -z "$psize" ]] && psize=$(sysctl hw.pagesize 2>/dev/null | awk "{print \$NF}")
     [[ -z "$psize" || "$psize" -le 0 ]] 2>/dev/null && psize=4096
+    # Try uvmexp2 (64-bit counters, NetBSD 5+) first
+    npages=$(sysctl -n vm.uvmexp2.npages 2>/dev/null)
+    free_p=$(sysctl -n vm.uvmexp2.free 2>/dev/null)
+    # Fall back to uvmexp
+    if [[ -z "$npages" || -z "$free_p" ]]; then
+      npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
+      [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
+      free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
+      [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
+    fi
     if [[ -n "$npages" && -n "$free_p" && "$npages" -gt 0 ]] 2>/dev/null; then
       awk -v np="$npages" -v fp="$free_p" -v ps="$psize" \
         "BEGIN{used=(np-fp)*ps; if(used<0)used=0; printf \"%.1f GB used\", used/1000000000}"
@@ -349,10 +355,16 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather ram_pct      bash -c '
     cd /tmp
-    npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
-    [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
-    free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
-    [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
+    # Try uvmexp2 (64-bit counters, NetBSD 5+) first
+    npages=$(sysctl -n vm.uvmexp2.npages 2>/dev/null)
+    free_p=$(sysctl -n vm.uvmexp2.free 2>/dev/null)
+    # Fall back to uvmexp
+    if [[ -z "$npages" || -z "$free_p" ]]; then
+      npages=$(sysctl -n vm.uvmexp.npages 2>/dev/null)
+      [[ -z "$npages" ]] && npages=$(sysctl vm.uvmexp.npages 2>/dev/null | awk "{print \$NF}")
+      free_p=$(sysctl -n vm.uvmexp.free 2>/dev/null)
+      [[ -z "$free_p" ]] && free_p=$(sysctl vm.uvmexp.free 2>/dev/null | awk "{print \$NF}")
+    fi
     if [[ -n "$npages" && -n "$free_p" && "$npages" -gt 0 ]] 2>/dev/null; then
       awk -v np="$npages" -v fp="$free_p" "BEGIN{printf \"%d%% free\", (fp/np)*100}"
     fi
@@ -372,27 +384,36 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather disk         bash -c 'df -Pk / | awk "NR==2 {printf \"%.1f GB used / %.0f GB total (%d%% free)\", \$3*1024/1e9, \$2*1024/1e9, 100-int(\$5)}"'
   gather gpu          bash -c '
-    _gpu_pat="^(vga|radeon|nouveau|gffb|genfb|uvesafb|wsdisplay|vesabios|bochs|cirrus|vmware|vmt)[0-9]* at "
-    for f in /var/run/dmesg.boot /var/log/dmesg; do
-      [[ -r "$f" ]] || continue
-      line=$(grep -E "$_gpu_pat" "$f" 2>/dev/null | head -1)
-      if [[ -n "$line" ]]; then
-        desc=$(echo "$line" | sed "s/.*: //")
-        [[ -n "$desc" ]] && echo "$desc" && exit
-        echo "$line" | awk "{print \$1}" && exit
-      fi
-    done
-    # Try live dmesg
-    line=$(dmesg 2>/dev/null | grep -E "$_gpu_pat" | head -1)
-    if [[ -n "$line" ]]; then
-      desc=$(echo "$line" | sed "s/.*: //")
-      [[ -n "$desc" ]] && echo "$desc" && exit
-    fi
-    # Try pcictl across common bus names
+    # pcictl gives proper PCI device names — try it first
     for bus in pci0 pci1 pci2; do
-      line=$(pcictl "$bus" list 2>/dev/null | grep -i "display\|vga" | head -1 | sed "s/^[^:]*: //")
+      line=$(pcictl "$bus" list 2>/dev/null | grep -iE "display|vga|3d|graphics" | head -1 | sed "s/^[^:]*: //")
       [[ -n "$line" ]] && echo "$line" && exit
     done
+    # dmesg: allow optional leading whitespace; skip wsdisplay (console, not GPU)
+    # include vmwgfx (VMware), gffb/genfb (framebuffer), drm drivers
+    _gpu_pat="(^|[[:space:]])(vga|radeon|nouveau|gffb|genfb|vmwgfx|bochs|cirrus|vmware|vmt|radeondrmkms|intelfb)[0-9]* at "
+    for f in /var/run/dmesg.boot /var/log/dmesg; do
+      [[ -r "$f" ]] || continue
+      line=$(grep -E "$_gpu_pat" "$f" 2>/dev/null | grep -v wsdisplay | head -1)
+      if [[ -n "$line" ]]; then
+        dev=$(echo "$line" | sed -E "s/.*[[:space:]]([a-z]+[0-9]+) at .*/\1/")
+        desc=$(echo "$line" | sed "s/.*: //")
+        if [[ "$desc" != "$line" && -n "$desc" ]]; then
+          echo "${dev}: ${desc}" && exit
+        fi
+        echo "$dev" && exit
+      fi
+    done
+    # Try live dmesg as last resort
+    line=$(dmesg 2>/dev/null | grep -E "$_gpu_pat" | grep -v wsdisplay | head -1)
+    if [[ -n "$line" ]]; then
+      dev=$(echo "$line" | sed -E "s/.*[[:space:]]([a-z]+[0-9]+) at .*/\1/")
+      desc=$(echo "$line" | sed "s/.*: //")
+      if [[ "$desc" != "$line" && -n "$desc" ]]; then
+        echo "${dev}: ${desc}" && exit
+      fi
+      echo "$dev" && exit
+    fi
   '
   gather serial       bash -c 'sysctl -n machdep.dmi.system-serial-number 2>/dev/null'
   gather model        bash -c 'sysctl -n machdep.dmi.system-product-name 2>/dev/null'
