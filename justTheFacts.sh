@@ -78,9 +78,9 @@ get_detail() { cut -d'|' -f2- < "$TMPDIR_JTF/$1" 2>/dev/null || echo "n/a"; }
 # ── Detect OS for branching ───────────────────
 OS_TYPE=$(uname -s)
 
-# On NetBSD, /sbin and /usr/sbin are not always in the PATH of non-interactive
-# shells. Sysctl, ifconfig, etc. live there — prepend them so subshells find them.
-[[ "$OS_TYPE" == "NetBSD" ]] && export PATH="/sbin:/usr/sbin:$PATH"
+# On NetBSD and OpenBSD, /sbin and /usr/sbin are not always in the PATH of
+# non-interactive shells. Sysctl, ifconfig, etc. live there — prepend them.
+[[ "$OS_TYPE" == "NetBSD" || "$OS_TYPE" == "OpenBSD" ]] && export PATH="/sbin:/usr/sbin:$PATH"
 
 # ── Spawn background jobs ─────────────────────
 gather hostname         hostname -s
@@ -429,6 +429,102 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather serial       bash -c 'sysctl -n machdep.dmi.system-serial-number 2>/dev/null'
   gather model        bash -c 'sysctl -n machdep.dmi.system-product-name 2>/dev/null'
+  gather chk_xclt     bash -c 'echo "0|n/a (macOS only)"'
+
+elif [[ "$OS_TYPE" == "OpenBSD" ]]; then
+  gather os_name      bash -c 'uname -s'
+  gather os_ver       bash -c 'uname -r'
+  gather os_build     bash -c 'uname -v | awk -F"[()]" "{print \$2}"'
+  gather cpu_model    bash -c '
+    cd /tmp
+    # hw.model is the CPU brand string on OpenBSD
+    m=$(sysctl -n hw.model 2>/dev/null)
+    [[ -z "$m" ]] && m=$(grep -m1 "^cpu[0-9]* at" /var/run/dmesg.boot 2>/dev/null | sed -nE "s/.*: (.+), id 0x.*/\1/p")
+    [[ -z "$m" ]] && m=$(dmesg 2>/dev/null | grep -m1 "^cpu[0-9]* at" | sed -nE "s/.*: (.+), id 0x.*/\1/p")
+    [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
+    [[ -z "$m" ]] && m=$(uname -m 2>/dev/null)
+    echo "$m" | tr -s " "
+  '
+  gather cpu_cores    bash -c '
+    cd /tmp
+    logical=$(sysctl -n hw.ncpuonline 2>/dev/null)
+    [[ -z "$logical" ]] && logical=$(sysctl -n hw.ncpu 2>/dev/null)
+    [[ -n "$logical" ]] && echo "${logical} logical"
+  '
+  gather ram_total    bash -c '
+    cd /tmp
+    total=$(sysctl -n hw.physmem 2>/dev/null)
+    [[ -n "$total" && "$total" -gt 0 ]] 2>/dev/null && \
+      awk -v t="$total" "BEGIN{printf \"%.0f GB\", t/1000000000}"
+  '
+  gather ram_used     bash -c '
+    cd /tmp
+    total=$(sysctl -n hw.physmem 2>/dev/null)
+    psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
+    # Locate fre column dynamically from vmstat header (OpenBSD has extra w column)
+    fre=$(vmstat 2>/dev/null | awk "NR==2{for(i=1;i<=NF;i++)if(\$i==\"fre\")col=i} NR==3{if(col>0)print \$col}")
+    total_pages=$(( total / psize )) 2>/dev/null
+    if [[ -n "$fre" && -n "$total" && "$fre" -ge 0 && "$total" -gt 0 ]] 2>/dev/null && \
+       [[ -z "$total_pages" || "$fre" -le "$total_pages" ]] 2>/dev/null; then
+      awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
+        "BEGIN{used=tot-(fre*ps); if(used<0)used=0; printf \"%.1f GB used\", used/1e9}"
+    fi
+  '
+  gather ram_pct      bash -c '
+    cd /tmp
+    total=$(sysctl -n hw.physmem 2>/dev/null)
+    psize=$(sysctl -n hw.pagesize 2>/dev/null); [[ -z "$psize" ]] && psize=4096
+    fre=$(vmstat 2>/dev/null | awk "NR==2{for(i=1;i<=NF;i++)if(\$i==\"fre\")col=i} NR==3{if(col>0)print \$col}")
+    total_pages=$(( total / psize )) 2>/dev/null
+    if [[ -n "$fre" && -n "$total" && "$fre" -ge 0 && "$total" -gt 0 ]] 2>/dev/null && \
+       [[ -z "$total_pages" || "$fre" -le "$total_pages" ]] 2>/dev/null; then
+      awk -v fre="$fre" -v ps="$psize" -v tot="$total" \
+        "BEGIN{pct=(fre*ps/tot)*100; if(pct>100)pct=100; printf \"%d%% free\", pct}"
+    fi
+  '
+  gather swap         bash -c '
+    cd /tmp
+    out=$(swapctl -s 2>/dev/null)
+    if [[ -z "$out" ]] || echo "$out" | grep -qi "no swap"; then echo "none configured"; exit; fi
+    # OpenBSD swapctl -s: "total: X 512-blocks allocated = Y used, Z available"
+    echo "$out" | awk "/allocated/{
+      for(i=1;i<=NF;i++){
+        if(\$i==\"used,\")    used=\$(i-1)+0
+        if(\$i==\"available\") avail=\$(i-1)+0
+      }
+      total=used+avail
+      if(total>0) printf \"%.1f GB used / %.1f GB total (%d%% free)\", used*512/1e9, total*512/1e9, avail/total*100
+      else print \"none configured\"
+    }"
+  '
+  gather disk         bash -c 'df -Pk / | awk "NR==2 {printf \"%.1f GB used / %.0f GB total (%d%% free)\", \$3*1024/1e9, \$2*1024/1e9, 100-int(\$5)}"'
+  gather gpu          bash -c '
+    # OpenBSD DRM/display driver names in dmesg
+    _gpu_pat="(inteldrm|radeondrm|amdgpu|vga|uvga|vmwsfb|bochs)[0-9]* at "
+    for f in /var/run/dmesg.boot /var/log/dmesg; do
+      [[ -r "$f" ]] || continue
+      line=$(grep -E "$_gpu_pat" "$f" 2>/dev/null | head -1)
+      if [[ -n "$line" ]]; then
+        desc=$(echo "$line" | sed -nE "s/.*\"(.+)\".*/\1/p")
+        [[ -n "$desc" ]] && echo "$desc" && exit
+        echo "$line" | sed -E "s/^[a-z]+[0-9]+ at [^ ]+ //" && exit
+      fi
+    done
+    line=$(dmesg 2>/dev/null | grep -E "$_gpu_pat" | head -1)
+    if [[ -n "$line" ]]; then
+      desc=$(echo "$line" | sed -nE "s/.*\"(.+)\".*/\1/p")
+      [[ -n "$desc" ]] && echo "$desc"
+    fi
+  '
+  gather serial       bash -c 'sysctl -n hw.serialno 2>/dev/null'
+  gather model        bash -c '
+    v=$(sysctl -n hw.vendor 2>/dev/null)
+    p=$(sysctl -n hw.product 2>/dev/null)
+    if [[ -n "$v" && -n "$p" ]]; then echo "$v $p"
+    elif [[ -n "$p" ]]; then echo "$p"
+    elif [[ -n "$v" ]]; then echo "$v"
+    fi
+  '
   gather chk_xclt     bash -c 'echo "0|n/a (macOS only)"'
 
 else
