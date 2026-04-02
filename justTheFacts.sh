@@ -308,7 +308,9 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     m=$(sysctl -n machdep.dmi.processor-version 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
+    [[ -z "$m" ]] && m=$(sysctl -n hw.machine_arch 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
+    [[ -z "$m" ]] && m=$(uname -m 2>/dev/null)
     echo "$m" | tr -s ' '
   '
   gather cpu_cores    bash -c '
