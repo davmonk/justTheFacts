@@ -309,7 +309,7 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
     [[ -z "$m" ]] && m=$(sysctl -n machdep.cpu_brand 2>/dev/null | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
     [[ -z "$m" ]] && m=$(sysctl -n hw.model 2>/dev/null)
     [[ -z "$m" ]] && m=$(uname -p 2>/dev/null)
-    echo "$m"
+    echo "$m" | sed 's/[[:space:]]\{2,\}/ /g'
   '
   gather cpu_cores    bash -c '
     cd /tmp
