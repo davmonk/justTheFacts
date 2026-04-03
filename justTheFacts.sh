@@ -298,6 +298,12 @@ if [[ "$OS_TYPE" == "Darwin" ]]; then
     path=$(xcode-select -p 2>/dev/null)
     [[ -n "$path" && -d "$path" ]] && echo "1|$path" || echo "0|run: xcode-select --install"
   '
+  gather chk_brew     bash -c '
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      [[ -x "$b" ]] && v=$("$b" --version 2>/dev/null | head -1) && echo "1|$v" && exit
+    done
+    echo "0|not installed"
+  '
 
 elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   gather os_name      bash -c 'uname -s'
@@ -429,7 +435,6 @@ elif [[ "$OS_TYPE" == "NetBSD" ]]; then
   '
   gather serial       bash -c 'sysctl -n machdep.dmi.system-serial-number 2>/dev/null'
   gather model        bash -c 'sysctl -n machdep.dmi.system-product-name 2>/dev/null'
-  gather chk_xclt     bash -c 'echo "0|n/a (macOS only)"'
 
 elif [[ "$OS_TYPE" == "OpenBSD" ]]; then
   gather os_name      bash -c 'uname -s'
@@ -525,7 +530,6 @@ elif [[ "$OS_TYPE" == "OpenBSD" ]]; then
     elif [[ -n "$v" ]]; then echo "$v"
     fi
   '
-  gather chk_xclt     bash -c 'echo "0|n/a (macOS only)"'
 
 else
   # Linux
@@ -582,7 +586,6 @@ else
   '
   gather serial       bash -c 'cat /sys/class/dmi/id/product_serial 2>/dev/null'
   gather model        bash -c 'cat /sys/class/dmi/id/product_name 2>/dev/null'
-  gather chk_xclt     bash -c 'echo "0|n/a (macOS only)"'
 fi
 
 # Wait for all background jobs
@@ -639,6 +642,8 @@ check_row "node"       "$(get_ok chk_node)"     "$(get_detail chk_node)"
 check_row "npm"        "$(get_ok chk_npm)"      "$(get_detail chk_npm)"
 [[ "$OS_TYPE" == "Darwin" ]] && \
 check_row "Xcode CLT"  "$(get_ok chk_xclt)"     "$(get_detail chk_xclt)"
+[[ "$OS_TYPE" == "Darwin" ]] && \
+check_row "Homebrew"   "$(get_ok chk_brew)"     "$(get_detail chk_brew)"
 hline_close
 header_row " Runtime "
 hline_open
