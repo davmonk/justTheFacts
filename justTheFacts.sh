@@ -223,6 +223,7 @@ gather chk_git       bash -c 'command -v git >/dev/null 2>&1 && v=$(git --versio
 gather chk_openssl   bash -c 'command -v openssl >/dev/null 2>&1 && v=$(openssl version 2>/dev/null) && echo "1|$v" || echo "0|not found"'
 gather chk_node      bash -c 'command -v node >/dev/null 2>&1 && v=$(node --version 2>/dev/null) && echo "1|node $v" || echo "0|not found"'
 gather chk_npm       bash -c 'command -v npm >/dev/null 2>&1 && v=$(npm --version 2>/dev/null) && echo "1|npm $v" || echo "0|not found"'
+gather chk_rust      bash -c 'command -v rustc >/dev/null 2>&1 && v=$(rustc --version 2>/dev/null) && echo "1|$v" || echo "0|not found"'
 
 if [[ "$OS_TYPE" == "Darwin" ]]; then
   gather os_name      bash -c 'sw_vers -productName'
@@ -541,6 +542,7 @@ check_row "git"        "$(get_ok chk_git)"      "$(get_detail chk_git)"
 check_row "openssl"    "$(get_ok chk_openssl)"  "$(get_detail chk_openssl)"
 check_row "node"       "$(get_ok chk_node)"     "$(get_detail chk_node)"
 check_row "npm"        "$(get_ok chk_npm)"      "$(get_detail chk_npm)"
+check_row "rust"       "$(get_ok chk_rust)"     "$(get_detail chk_rust)"
 [[ "$OS_TYPE" == "Darwin" ]] && \
 check_row "Xcode CLT"  "$(get_ok chk_xclt)"     "$(get_detail chk_xclt)"
 hline_close
